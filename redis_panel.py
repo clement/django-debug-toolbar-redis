@@ -28,7 +28,7 @@ class TrackingRedisMixin(object):
         debug_config = getattr(settings, 'DEBUG_TOOLBAR_CONFIG', {})
         enable_stack = debug_config.get('ENABLE_STACKTRACES', True)
 
-        trace =  enable_stack and tidy_stacktrace(reversed(get_stack())) or []
+        trace =  enable_stack and tidy_stacktrace(reversed(get_stack()))[:-2] or []
 
         call = { 'function': func_name,
                  'args': map(unicode, args + tuple(kwargs.values())),
