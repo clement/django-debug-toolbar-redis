@@ -179,6 +179,7 @@ template = """
             <th>{% trans "Call" %}</th>
             <th>{% trans "Args" %}</th>
             <th>{% trans "Result" %}</th>
+            <th>{% trans "Action" %}</th>
         </tr>
     </thead>
 
@@ -190,11 +191,12 @@ template = """
             <td>{{ call.function }}</td>
             <td>{{ call.args }}</td>
             <td>{{ call.return }}</td>
+            <td><a href="#" class="djdtRedisShowTrace">{% trans "Show stacktrace" %}</a></td>
         </tr>
 
         {% if call.trace %}
-            <tr class="{{ call.function }}">
-                <td colspan="4">
+            <tr class="djdtRedisTrace" style="display:none">
+                <td colspan="5">
                     <pre class="stack">{{ call.trace }}</pre>
                 </td>
             </tr>
@@ -204,4 +206,9 @@ template = """
         {% endfor %}
     </tbody>
 </table>
+<script type="text/javascript">
+    $('.djdtRedisShowTrace').click(function () {
+        $(this).parent().parent().next().toggle()
+    })
+</script>
 """
