@@ -1,0 +1,5 @@
+*~
+*.pyc
+.*.sw?
+*.bak
+.DS_Store
