@@ -53,7 +53,7 @@ class BaseTrackingPipeline(BasePipeline):
         debug_config = getattr(settings, 'DEBUG_TOOLBAR_CONFIG', {})
         enable_stack = debug_config.get('ENABLE_STACKTRACES', True)
 
-        trace =  enable_stack and tidy_stacktrace(reversed(get_stack()))[:-2] or []
+        trace =  enable_stack and tidy_stacktrace(reversed(get_stack()))[:-1] or []
 
         transaction = {'calls': []}
 
