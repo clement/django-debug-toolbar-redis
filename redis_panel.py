@@ -12,15 +12,16 @@ from django.utils.safestring import mark_safe
 from debug_toolbar.utils import get_stack, tidy_stacktrace
 from debug_toolbar.panels import DebugPanel
 from redis import Redis, StrictRedis
+from redis.client import BasePipeline
 
 
 __all__ = ['redis_call', 'TrackingRedisMixin', 'TrackingRedis',
-           'StrictTrackingRedis', 'RedisPanel']
+           'StrictTrackingRedis', 'BaseTrackingPipeline', 'RedisPanel',
+           'TrackingPipelineMixin', 'TrackingPipeline',
+           'StrictTrackingPipeline']
 
 
-redis_call = Signal(providing_args=['function', 'args', 'trace',
-                                    'start', 'stop', 'duration',
-                                    'return'])
+redis_call = Signal(providing_args=['duration', 'calls'])
 
 
 class TrackingRedisMixin(object):
@@ -35,23 +36,69 @@ class TrackingRedisMixin(object):
                  'trace': trace }
 
         try:
-            call['start'] = time.time()
+            start = time.time()
             ret = super(TrackingRedisMixin, self).execute_command(func_name,
                     *args, **kwargs)
-        finally:
-            call['stop'] = time.time()
-            call['duration'] = (call['stop'] - call['start']) * 1000
             call['return'] = unicode(ret)
+        finally:
+            stop = time.time()
+            duration = (stop - start) * 1000
 
-            redis_call.send_robust(sender=self, **call)
+            redis_call.send_robust(sender=self, duration=duration, calls=(call,))
+
+        return ret
+
+class BaseTrackingPipeline(BasePipeline):
+    def execute(self, *args, **kw):
+        debug_config = getattr(settings, 'DEBUG_TOOLBAR_CONFIG', {})
+        enable_stack = debug_config.get('ENABLE_STACKTRACES', True)
+
+        trace =  enable_stack and tidy_stacktrace(reversed(get_stack()))[:-2] or []
+
+        transaction = {'calls': []}
+
+        for arguments, options in self.command_stack:
+            transaction['calls'].append({'function': arguments[0],
+                                         'args': map(unicode, tuple(arguments[1:]) + tuple(options.values())),
+                                         'trace': trace})
+
+        try:
+            start = time.time()
+            ret = super(BaseTrackingPipeline, self).execute(*args, **kw)
+
+            for i, call in enumerate(transaction['calls']):
+                call['return'] = unicode(ret[i])
+        finally:
+            stop = time.time()
+            transaction['duration'] = (stop - start) * 1000
+
+            redis_call.send_robust(sender=self, **transaction)
 
         return ret
 
 
 class TrackingRedis(TrackingRedisMixin, Redis):
-    pass
+    def pipeline(self, transaction=False, shard_hint=None):
+        return TrackingPipeline(
+                self.connection_pool,
+                self.response_callbacks,
+                transaction,
+                shard_hint,
+            )
 
 class StrictTrackingRedis(TrackingRedisMixin, StrictRedis):
+    def pipeline(self, transaction=False, shard_hint=None):
+        return StrictTrackingPipeline(
+                self.connection_pool,
+                self.response_callbacks,
+                transaction,
+                shard_hint,
+            )
+
+class TrackingPipeline(BaseTrackingPipeline, TrackingRedis):
+    pass
+
+class StrictTrackingPipeline(BaseTrackingPipeline, StrictTrackingRedis):
     pass
 
 
@@ -64,9 +111,10 @@ class RedisPanel(DebugPanel):
         self.calls = []
         redis_call.connect(self._add_call)
 
-    def _add_call(self, sender, **kw):
-        kw['trace'] = render_stacktrace(kw['trace'])
-        self.calls.append(kw)
+    def _add_call(self, sender, duration, calls, **kw):
+        for call in calls:
+            call['trace'] = render_stacktrace(call['trace'])
+        self.calls.append({'duration': duration, 'calls': calls})
 
     def nav_title(self):
         return _("Redis")
@@ -85,9 +133,10 @@ class RedisPanel(DebugPanel):
 
     def content(self):
         context = {'calls': self.calls, 'commands': {}}
-        for call in self.calls:
-            context['commands'][call['function']] = \
-                    context['commands'].get(call['function'], 0) + 1
+        for tr in self.calls:
+            for call in tr['calls']:
+                context['commands'][call['function']] = \
+                        context['commands'].get(call['function'], 0) + 1
         return Template(template).render(Context(context))
 
 
@@ -106,15 +155,22 @@ def render_stacktrace(trace):
 template = """
 {% load i18n %}
 <h4>{% trans "Calls" %}</h4>
-{% for command, count in commands.iteritems %}
-<p class="fieldset">
-    <label>
-        <input class="filter" value=".{{ command }}" type="checkbox">
-        <span class="legend">{{ command }}:</span>
-        <span>{{ count }}</span>
-    </label>
-</p>
-{% endfor %}
+<table>
+    <thead>
+        <tr>
+            <th>{% trans "Command" %}</th>
+            <th>{% trans "Count" %}</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for command, count in commands.iteritems %}
+        <tr>
+            <td>{{ command }}</td>
+            <td>{{ count }}</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
 
 <table>
     <thead>
@@ -127,10 +183,10 @@ template = """
     </thead>
 
     <tbody>
-        {% for call in calls %}
-
-        <tr class="{{ call.function }}">
-            <td>{{ call.duration }} ms</td>
+        {% for tr in calls %}
+        {% for call in tr.calls %}
+        <tr>
+            <td>{% if forloop.first %}{{ tr.duration }} ms{% endif %}</td>
             <td>{{ call.function }}</td>
             <td>{{ call.args }}</td>
             <td>{{ call.return }}</td>
@@ -145,20 +201,7 @@ template = """
         {% endif %}
 
         {% endfor %}
+        {% endfor %}
     </tbody>
 </table>
-<script type="text/javascript">
-    $('.filter').change(function () {
-      $('.filter').each(function () {
-        var $this = $(this)
-          , $target = $($this.val())
-        if ($this.attr('checked')) {
-            $target.show()
-        }
-        else {
-            $target.hide()
-        }
-      })
-    })
-</script>
 """
