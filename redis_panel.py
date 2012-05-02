@@ -24,16 +24,26 @@ __all__ = ['redis_call', 'TrackingRedisMixin', 'TrackingRedis',
 redis_call = Signal(providing_args=['duration', 'calls'])
 
 
-class TrackingRedisMixin(object):
-    def execute_command(self, func_name, *args, **kwargs):
+class TrackingRedisBase(object):
+    def make_call_dict(self, depth, *args, **kwargs):
         debug_config = getattr(settings, 'DEBUG_TOOLBAR_CONFIG', {})
         enable_stack = debug_config.get('ENABLE_STACKTRACES', True)
 
-        trace =  enable_stack and tidy_stacktrace(reversed(get_stack()))[:-2] or []
+        trace =  enable_stack and tidy_stacktrace(reversed(get_stack()))[:-depth-1] or []
 
-        call = { 'function': func_name,
-                 'args': map(unicode, args + tuple(kwargs.values())),
+        # prepare arguments for display
+        arguments = map(repr, args[2:])
+        options = map(lambda (k, v): "%s=%s" % (k, repr(v)), kwargs.items())
+
+        return { 'function': args[0],
+                 'key': len(args) > 1 and args[1] or '',
+                 'args': ' , '.join(arguments + options),
                  'trace': trace }
+
+
+class TrackingRedisMixin(TrackingRedisBase):
+    def execute_command(self, func_name, *args, **kwargs):
+        call = self.make_call_dict(2, func_name, *args, **kwargs)
 
         try:
             start = time.time()
@@ -48,31 +58,24 @@ class TrackingRedisMixin(object):
 
         return ret
 
-class BaseTrackingPipeline(BasePipeline):
+class BaseTrackingPipeline(TrackingRedisBase, BasePipeline):
     def execute(self, *args, **kw):
-        debug_config = getattr(settings, 'DEBUG_TOOLBAR_CONFIG', {})
-        enable_stack = debug_config.get('ENABLE_STACKTRACES', True)
-
-        trace =  enable_stack and tidy_stacktrace(reversed(get_stack()))[:-1] or []
-
-        transaction = {'calls': []}
+        tr = {'calls': []}
 
         for arguments, options in self.command_stack:
-            transaction['calls'].append({'function': arguments[0],
-                                         'args': map(unicode, tuple(arguments[1:]) + tuple(options.values())),
-                                         'trace': trace})
+            tr['calls'].append(self.make_call_dict(1, *arguments, **options))
 
         try:
             start = time.time()
             ret = super(BaseTrackingPipeline, self).execute(*args, **kw)
 
-            for i, call in enumerate(transaction['calls']):
+            for i, call in enumerate(tr['calls']):
                 call['return'] = unicode(ret[i])
         finally:
             stop = time.time()
-            transaction['duration'] = (stop - start) * 1000
+            tr['duration'] = (stop - start) * 1000
 
-            redis_call.send_robust(sender=self, **transaction)
+            redis_call.send_robust(sender=self, **tr)
 
         return ret
 
@@ -177,6 +180,7 @@ template = """
         <tr>
             <th>{% trans "Duration" %}</th>
             <th>{% trans "Call" %}</th>
+            <th>{% trans "Key" %}</th>
             <th>{% trans "Args" %}</th>
             <th>{% trans "Result" %}</th>
             <th>{% trans "Action" %}</th>
@@ -189,6 +193,7 @@ template = """
         <tr>
             <td>{% if forloop.first %}{{ tr.duration }} ms{% endif %}</td>
             <td>{{ call.function }}</td>
+            <td>{{ call.key }}</td>
             <td>{{ call.args }}</td>
             <td>{{ call.return }}</td>
             <td><a href="#" class="djdtRedisShowTrace">{% trans "Show stacktrace" %}</a></td>
@@ -196,7 +201,7 @@ template = """
 
         {% if call.trace %}
             <tr class="djdtRedisTrace" style="display:none">
-                <td colspan="5">
+                <td colspan="6">
                     <pre class="stack">{{ call.trace }}</pre>
                 </td>
             </tr>
