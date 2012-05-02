@@ -95,10 +95,10 @@ class StrictTrackingRedis(TrackingRedisMixin, StrictRedis):
                 shard_hint,
             )
 
-class TrackingPipeline(BaseTrackingPipeline, TrackingRedis):
+class TrackingPipeline(BaseTrackingPipeline, Redis):
     pass
 
-class StrictTrackingPipeline(BaseTrackingPipeline, StrictTrackingRedis):
+class StrictTrackingPipeline(BaseTrackingPipeline, StrictRedis):
     pass
 
 
