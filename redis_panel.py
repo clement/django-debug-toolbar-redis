@@ -135,7 +135,13 @@ class RedisPanel(DebugPanel):
         return ''
 
     def content(self):
-        context = {'calls': self.calls, 'commands': {}}
+        debug_config = getattr(settings, 'DEBUG_TOOLBAR_CONFIG', {})
+        enable_stack = debug_config.get('ENABLE_STACKTRACES', True)
+        context = {
+                'calls': self.calls,
+                'commands': {},
+                'enable_stack': enable_stack
+        }
         for tr in self.calls:
             for call in tr['calls']:
                 context['commands'][call['function']] = \
@@ -196,7 +202,7 @@ template = """
             <td>{{ call.key }}</td>
             <td>{{ call.args }}</td>
             <td>{{ call.return }}</td>
-            <td><a href="#" class="djdtRedisShowTrace">{% trans "Show stacktrace" %}</a></td>
+            <td>{% if enable_stack %}<a href="#" class="djdtRedisShowTrace">{% trans "Show stacktrace" %}</a>{% endif %}</td>
         </tr>
 
         {% if call.trace %}
@@ -212,8 +218,17 @@ template = """
     </tbody>
 </table>
 <script type="text/javascript">
-    $('.djdtRedisShowTrace').click(function () {
-        $(this).parent().parent().next().toggle()
-    })
+// the way ddt is using jquery we can't get at it after the fact in the usual
+// manner
+{% if enable_stack %}
+    (function(window, document) {
+        var j = window.djdt.jQuery;
+        j(document).ready(function() {
+            j('.djdtRedisShowTrace').click(function () {
+                j(this).parent().parent().next().toggle()
+            })
+    });
+    })(window, document);
+{% endif %}
 </script>
 """
